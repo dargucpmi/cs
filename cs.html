@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Raf Bulucu</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root{
+    --bg:#0d1b14;
+    --panel:#13271c;
+    --line:#274d38;
+    --ink:#e8f3ec;
+    --muted:#7da890;
+    --accent:#34d27a;
+    --warn:#e0573e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    display:flex;
+    flex-direction:column;
+    min-height:100dvh;
+    padding:20px 16px 32px;
+  }
+  header{margin-bottom:22px}
+  .eyebrow{
+    font-size:11px;letter-spacing:.28em;text-transform:uppercase;
+    color:var(--muted);margin-bottom:6px;
+  }
+  h1{
+    font-size:30px;font-weight:700;letter-spacing:-.01em;line-height:1.05;
+    font-family:Georgia,"Times New Roman",serif;
+  }
+  .wrap{flex:1;display:flex;flex-direction:column;gap:18px;max-width:520px;width:100%;margin:0 auto}
+ 
+  /* result */
+  #result{
+    border:1px solid var(--line);
+    background:var(--panel);
+    border-radius:14px;
+    padding:22px 20px;
+    min-height:128px;
+    display:flex;flex-direction:column;justify-content:center;
+  }
+  .r-empty{color:var(--muted);font-size:14px;line-height:1.5}
+  .r-code{font-size:12px;letter-spacing:.18em;color:var(--muted);text-transform:uppercase;margin-bottom:8px}
+  .r-shelf{font-size:46px;font-weight:700;font-family:Georgia,serif;color:var(--accent);line-height:1}
+  .r-meta{margin-top:12px;font-size:13px;color:var(--ink);line-height:1.5}
+  .r-fail .r-shelf{color:var(--warn);font-size:22px}
+ 
+  /* input */
+  .field{display:flex;gap:8px}
+  input[type=text]{
+    flex:1;background:#0a140e;border:1px solid var(--line);color:var(--ink);
+    border-radius:10px;padding:14px 14px;font-size:18px;font-family:inherit;
+    letter-spacing:.06em;text-transform:uppercase;
+  }
+  input::placeholder{color:#456;text-transform:none;letter-spacing:0}
+  input:focus{outline:none;border-color:var(--accent)}
+  button{
+    font-family:inherit;cursor:pointer;border:none;border-radius:10px;
+    font-size:15px;font-weight:600;
+  }
+  .btn-go{background:var(--accent);color:#06140c;padding:0 22px}
+  .btn-scan{
+    background:transparent;color:var(--accent);border:1px solid var(--line);
+    padding:14px;width:100%;letter-spacing:.04em;
+  }
+  .btn-scan.active{border-color:var(--accent)}
+ 
+  #reader{border-radius:12px;overflow:hidden;border:1px solid var(--line);display:none}
+  #reader.show{display:block}
+ 
+  footer{margin-top:22px;color:var(--muted);font-size:11px;line-height:1.6;text-align:center}
+  footer code{color:var(--ink)}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="eyebrow">Depo · Raf Sorgu</div>
+      <h1>CS kodunu okut<br>rafı gör</h1>
+    </header>
+ 
+    <div id="result">
+      <div class="r-empty">Aşağıdan CS kodunu yaz veya kamerayla okut. Sonuç burada görünür.</div>
+    </div>
+ 
+    <div class="field">
+      <input id="code" type="text" inputmode="text" autocomplete="off"
+             placeholder="CS kodu (örn. CS1042)">
+      <button class="btn-go" id="go">Ara</button>
+    </div>
+ 
+    <button class="btn-scan" id="scanToggle">Kamerayla okut</button>
+    <div id="reader"></div>
+ 
+    <footer>
+      Veri <code>SHELVES</code> içinde gömülü. Güncellemek için dosyadaki listeyi düzenle.<br>
+      Link ile direkt sorgu: <code>?cs=CS1042</code>
+    </footer>
+  </div>
+ 
+<script>
+/* ----- VERİ: CS kodu -> raf eşlemesi -----
+   Buraya kendi kodlarını yaz. İstersen { raf, ek bilgi } objesi de verebilirsin. */
+const SHELVES = {
+  "CS1001": { shelf: "A-12", note: "Koridor 1, alt raf" },
+  "CS1042": { shelf: "B-07", note: "Koridor 2, göz hizası" },
+  "CS2200": { shelf: "C-15", note: "Soğuk oda" },
+  "CS3098": "D-03"          // sadece raf string'i de olur
+};
+ 
+const resultEl = document.getElementById('result');
+const inputEl  = document.getElementById('code');
+ 
+function normalize(s){ return (s||"").trim().toUpperCase(); }
+ 
+function lookup(raw){
+  const code = normalize(raw);
+  if(!code){ return; }
+  const rec = SHELVES[code];
+  if(rec === undefined){
+    resultEl.className = 'r-fail';
+    resultEl.innerHTML =
+      '<div class="r-code">'+code+'</div>'+
+      '<div class="r-shelf">Bulunamadı</div>'+
+      '<div class="r-meta">Bu kod listede yok. Kodu kontrol et.</div>';
+    return;
+  }
+  const shelf = typeof rec === 'string' ? rec : rec.shelf;
+  const note  = typeof rec === 'string' ? '' : (rec.note || '');
+  resultEl.className = '';
+  resultEl.innerHTML =
+    '<div class="r-code">'+code+'</div>'+
+    '<div class="r-shelf">'+shelf+'</div>'+
+    (note ? '<div class="r-meta">'+note+'</div>' : '');
+}
+ 
+/* Okutulan QR/barkod URL ise içinden cs parametresini, değilse metni kod kabul et */
+function extractCode(text){
+  try{
+    const u = new URL(text);
+    const p = u.searchParams.get('cs');
+    if(p) return p;
+  }catch(e){ /* URL değil */ }
+  return text;
+}
+ 
+document.getElementById('go').addEventListener('click', ()=>lookup(inputEl.value));
+inputEl.addEventListener('keydown', e=>{ if(e.key==='Enter') lookup(inputEl.value); });
+ 
+/* URL ile gelen ?cs=KOD */
+const urlCode = new URLSearchParams(location.search).get('cs');
+if(urlCode){ inputEl.value = normalize(urlCode); lookup(urlCode); }
+ 
+/* ----- Kamera tarayıcı ----- */
+const readerEl   = document.getElementById('reader');
+const toggleBtn  = document.getElementById('scanToggle');
+let scanner = null, scanning = false;
+ 
+async function startScan(){
+  readerEl.classList.add('show');
+  toggleBtn.classList.add('active');
+  toggleBtn.textContent = 'Taramayı durdur';
+  scanner = new Html5Qrcode("reader");
+  try{
+    await scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 240, height: 240 } },
+      decoded => {
+        const code = extractCode(decoded.trim());
+        inputEl.value = normalize(code);
+        lookup(code);
+        stopScan();
+      },
+      ()=>{} // okuma hataları sessiz
+    );
+    scanning = true;
+  }catch(err){
+    readerEl.classList.remove('show');
+    toggleBtn.classList.remove('active');
+    toggleBtn.textContent = 'Kamerayla okut';
+    resultEl.className = 'r-fail';
+    resultEl.innerHTML =
+      '<div class="r-shelf">Kamera açılamadı</div>'+
+      '<div class="r-meta">İzin verilmedi veya cihaz desteklemiyor. Kodu elle yazabilirsin.</div>';
+  }
+}
+ 
+async function stopScan(){
+  if(scanner && scanning){
+    try{ await scanner.stop(); scanner.clear(); }catch(e){}
+  }
+  scanning = false;
+  readerEl.classList.remove('show');
+  toggleBtn.classList.remove('active');
+  toggleBtn.textContent = 'Kamerayla okut';
+}
+ 
+toggleBtn.addEventListener('click', ()=>{ scanning ? stopScan() : startScan(); });
+</script>
+</body>
+</html>
