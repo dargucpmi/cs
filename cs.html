@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Raf Bulucu</title>
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#0d1b14;
@@ -37,7 +37,6 @@
   }
   .wrap{flex:1;display:flex;flex-direction:column;gap:18px;max-width:520px;width:100%;margin:0 auto}
  
-  /* result */
   #result{
     border:1px solid var(--line);
     background:var(--panel);
@@ -49,10 +48,9 @@
   .r-empty{color:var(--muted);font-size:14px;line-height:1.5}
   .r-code{font-size:12px;letter-spacing:.18em;color:var(--muted);text-transform:uppercase;margin-bottom:8px}
   .r-shelf{font-size:46px;font-weight:700;font-family:Georgia,serif;color:var(--accent);line-height:1}
-  .r-meta{margin-top:12px;font-size:13px;color:var(--ink);line-height:1.5}
   .r-fail .r-shelf{color:var(--warn);font-size:22px}
+  .r-meta{margin-top:12px;font-size:13px;line-height:1.5}
  
-  /* input */
   .field{display:flex;gap:8px}
   input[type=text]{
     flex:1;background:#0a140e;border:1px solid var(--line);color:var(--ink);
@@ -61,19 +59,10 @@
   }
   input::placeholder{color:#456;text-transform:none;letter-spacing:0}
   input:focus{outline:none;border-color:var(--accent)}
-  button{
-    font-family:inherit;cursor:pointer;border:none;border-radius:10px;
-    font-size:15px;font-weight:600;
-  }
+  input:disabled{opacity:.5}
+  button{font-family:inherit;cursor:pointer;border:none;border-radius:10px;font-size:15px;font-weight:600}
   .btn-go{background:var(--accent);color:#06140c;padding:0 22px}
-  .btn-scan{
-    background:transparent;color:var(--accent);border:1px solid var(--line);
-    padding:14px;width:100%;letter-spacing:.04em;
-  }
-  .btn-scan.active{border-color:var(--accent)}
- 
-  #reader{border-radius:12px;overflow:hidden;border:1px solid var(--line);display:none}
-  #reader.show{display:block}
+  .btn-go:disabled{opacity:.4;cursor:default}
  
   footer{margin-top:22px;color:var(--muted);font-size:11px;line-height:1.6;text-align:center}
   footer code{color:var(--ink)}
@@ -83,126 +72,92 @@
   <div class="wrap">
     <header>
       <div class="eyebrow">Depo · Raf Sorgu</div>
-      <h1>CS kodunu okut<br>rafı gör</h1>
+      <h1>CS kodunu yaz<br>rafı gör</h1>
     </header>
  
     <div id="result">
-      <div class="r-empty">Aşağıdan CS kodunu yaz veya kamerayla okut. Sonuç burada görünür.</div>
+      <div class="r-empty">Veri yükleniyor…</div>
     </div>
  
     <div class="field">
       <input id="code" type="text" inputmode="text" autocomplete="off"
-             placeholder="CS kodu (örn. CS1042)">
-      <button class="btn-go" id="go">Ara</button>
+             placeholder="CS kodu" disabled>
+      <button class="btn-go" id="go" disabled>Ara</button>
     </div>
  
-    <button class="btn-scan" id="scanToggle">Kamerayla okut</button>
-    <div id="reader"></div>
- 
     <footer>
-      Veri <code>SHELVES</code> içinde gömülü. Güncellemek için dosyadaki listeyi düzenle.<br>
+      Veri kaynağı: <code>data.xlsx</code> (1. kolon = CS kodu, 2. kolon = raf).<br>
       Link ile direkt sorgu: <code>?cs=CS1042</code>
     </footer>
   </div>
  
 <script>
-/* ----- VERİ: CS kodu -> raf eşlemesi -----
-   Buraya kendi kodlarını yaz. İstersen { raf, ek bilgi } objesi de verebilirsin. */
-const SHELVES = {
-  "CS1001": { shelf: "A-12", note: "Koridor 1, alt raf" },
-  "CS1042": { shelf: "B-07", note: "Koridor 2, göz hizası" },
-  "CS2200": { shelf: "C-15", note: "Soğuk oda" },
-  "CS3098": "D-03"          // sadece raf string'i de olur
-};
+const DATA_FILE = "data.xlsx";   // repo kökündeki dosya adı
+const SHELVES = new Map();        // CS kodu -> raf
  
 const resultEl = document.getElementById('result');
 const inputEl  = document.getElementById('code');
+const goBtn    = document.getElementById('go');
  
-function normalize(s){ return (s||"").trim().toUpperCase(); }
+const normalize = s => (s==null ? "" : String(s).trim().toUpperCase());
  
-function lookup(raw){
-  const code = normalize(raw);
-  if(!code){ return; }
-  const rec = SHELVES[code];
-  if(rec === undefined){
-    resultEl.className = 'r-fail';
-    resultEl.innerHTML =
-      '<div class="r-code">'+code+'</div>'+
-      '<div class="r-shelf">Bulunamadı</div>'+
-      '<div class="r-meta">Bu kod listede yok. Kodu kontrol et.</div>';
-    return;
-  }
-  const shelf = typeof rec === 'string' ? rec : rec.shelf;
-  const note  = typeof rec === 'string' ? '' : (rec.note || '');
+function setEmpty(msg){
+  resultEl.className = '';
+  resultEl.innerHTML = '<div class="r-empty">'+msg+'</div>';
+}
+function setFail(code, msg){
+  resultEl.className = 'r-fail';
+  resultEl.innerHTML =
+    '<div class="r-code">'+code+'</div>'+
+    '<div class="r-shelf">Bulunamadı</div>'+
+    '<div class="r-meta">'+msg+'</div>';
+}
+function setHit(code, shelf){
   resultEl.className = '';
   resultEl.innerHTML =
     '<div class="r-code">'+code+'</div>'+
-    '<div class="r-shelf">'+shelf+'</div>'+
-    (note ? '<div class="r-meta">'+note+'</div>' : '');
+    '<div class="r-shelf">'+shelf+'</div>';
 }
  
-/* Okutulan QR/barkod URL ise içinden cs parametresini, değilse metni kod kabul et */
-function extractCode(text){
+function lookup(raw){
+  const code = normalize(raw);
+  if(!code) return;
+  if(SHELVES.has(code)) setHit(code, SHELVES.get(code));
+  else setFail(code, 'Bu kod listede yok. Kodu kontrol et.');
+}
+ 
+async function loadData(){
   try{
-    const u = new URL(text);
-    const p = u.searchParams.get('cs');
-    if(p) return p;
-  }catch(e){ /* URL değil */ }
-  return text;
+    const res = await fetch(DATA_FILE);
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const buf = await res.arrayBuffer();
+    const wb  = XLSX.read(buf, { type:'array' });
+    const ws  = wb.Sheets[wb.SheetNames[0]];
+    // header:1 -> her satır dizi olarak gelir; ilk iki kolonu al
+    const rows = XLSX.utils.sheet_to_json(ws, { header:1, blankrows:false });
+    for(const row of rows){
+      const code = normalize(row[0]);
+      const shelf = row[1]==null ? "" : String(row[1]).trim();
+      if(code && shelf) SHELVES.set(code, shelf);
+    }
+    if(SHELVES.size === 0){ setEmpty('Dosya okundu ama satır bulunamadı. data.xlsx içeriğini kontrol et.'); return; }
+ 
+    inputEl.disabled = false; goBtn.disabled = false;
+    inputEl.placeholder = 'CS kodu (örn. CS1042)';
+    setEmpty('Hazır. CS kodunu yaz ve Ara’ya bas. ('+SHELVES.size+' kayıt)');
+ 
+    const urlCode = new URLSearchParams(location.search).get('cs');
+    if(urlCode){ inputEl.value = normalize(urlCode); lookup(urlCode); }
+  }catch(err){
+    setEmpty('Veri yüklenemedi ('+err.message+'). data.xlsx repo kökünde mi, sayfa HTTPS/sunucu üzerinden mi açıldı?');
+  }
 }
  
-document.getElementById('go').addEventListener('click', ()=>lookup(inputEl.value));
+goBtn.addEventListener('click', ()=>lookup(inputEl.value));
 inputEl.addEventListener('keydown', e=>{ if(e.key==='Enter') lookup(inputEl.value); });
  
-/* URL ile gelen ?cs=KOD */
-const urlCode = new URLSearchParams(location.search).get('cs');
-if(urlCode){ inputEl.value = normalize(urlCode); lookup(urlCode); }
- 
-/* ----- Kamera tarayıcı ----- */
-const readerEl   = document.getElementById('reader');
-const toggleBtn  = document.getElementById('scanToggle');
-let scanner = null, scanning = false;
- 
-async function startScan(){
-  readerEl.classList.add('show');
-  toggleBtn.classList.add('active');
-  toggleBtn.textContent = 'Taramayı durdur';
-  scanner = new Html5Qrcode("reader");
-  try{
-    await scanner.start(
-      { facingMode: "environment" },
-      { fps: 10, qrbox: { width: 240, height: 240 } },
-      decoded => {
-        const code = extractCode(decoded.trim());
-        inputEl.value = normalize(code);
-        lookup(code);
-        stopScan();
-      },
-      ()=>{} // okuma hataları sessiz
-    );
-    scanning = true;
-  }catch(err){
-    readerEl.classList.remove('show');
-    toggleBtn.classList.remove('active');
-    toggleBtn.textContent = 'Kamerayla okut';
-    resultEl.className = 'r-fail';
-    resultEl.innerHTML =
-      '<div class="r-shelf">Kamera açılamadı</div>'+
-      '<div class="r-meta">İzin verilmedi veya cihaz desteklemiyor. Kodu elle yazabilirsin.</div>';
-  }
-}
- 
-async function stopScan(){
-  if(scanner && scanning){
-    try{ await scanner.stop(); scanner.clear(); }catch(e){}
-  }
-  scanning = false;
-  readerEl.classList.remove('show');
-  toggleBtn.classList.remove('active');
-  toggleBtn.textContent = 'Kamerayla okut';
-}
- 
-toggleBtn.addEventListener('click', ()=>{ scanning ? stopScan() : startScan(); });
+loadData();
 </script>
 </body>
 </html>
+ 
